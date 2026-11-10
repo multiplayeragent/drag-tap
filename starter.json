@@ -1,0 +1,21 @@
+{
+  "name": "Drag Tap",
+  "genre": "racing",
+  "dim": "2D",
+  "mode": "Versus",
+  "players": "2–6",
+  "hook": "Launch on green. Shift on green. Ten seconds.",
+  "how": "Up to six cars line up. Tap on green to launch, then tap each time the rev needle hits the green zone to shift up. Perfect shifts give a kick, early ones bog down, late ones bounce off the limiter. Best time wins.",
+  "controls": "Space, Enter or click to launch and shift; on phones, tap the big button",
+  "uses": [
+    ["Leaderboard", "Each player's fastest run."],
+    ["Host-run rounds", "One player's browser lights the tree, sets the lanes and posts the results; if it leaves, the next player takes over."],
+    ["Bots", "Bot drivers with their own reactions and shifting fill the empty lanes."],
+    ["Live sync", "Every car moves for everyone as its driver launches and shifts."]
+  ],
+  "ideas": [
+    "Add a nitro button you can use once per race",
+    "Let players pick their car's color and number before the race",
+    "Make it a night race on a rainy strip with slippery launches"
+  ]
+}
