@@ -180,7 +180,7 @@ function stepCar(c, dt) {
   if (!c.launched) return;
   for (let left = dt; left > 1e-9; left -= 1 / 240) {
     const h = Math.min(left, 1 / 240);
-    if (c.f) { c.v = Math.max(0, c.v - CONFIG.chuteDecel * h); c.x += c.v * h; continue; } // past the line: parachute
+    if (c.f) { c.v = Math.max(0, c.v - CONFIG.chuteDecel * h); c.x += c.v * h; c.clock += h * 1000; continue; } // past the line: parachute (the clock runs on, so catching up never replays it)
     const top = CONFIG.gears[c.g], rpm = c.v / top;
     if (rpm >= 0.999) c.onLim = true; else if (rpm < 0.97) c.onLim = false; // the limiter cuts in, and back out
     let a = c.onLim ? -CONFIG.limiterDecel : Math.min(CONFIG.grip, CONFIG.power / Math.max(1, c.v)) * band(rpm) * (c.clock < c.boostUntil ? CONFIG.boost : 1);
@@ -372,7 +372,7 @@ function myTick(r, dt) {
   }
   if (me.jumped && !c.launched && tg >= 0) launch(c, 0, true);
   const wasHome = c.f;
-  stepCar(c, dt);
+  stepCar(c, c.launched ? Math.max(0, Math.min(30, (Date.now() - r.greenAt - c.clock) / 1000)) : 0); // caught up with real time, like the bots: a slow frame or a stalled tab never leaves your car behind
   if (!wasHome && c.f) { const pb = !me.best || c.f < me.best; me.best = pb ? c.f : me.best; popup(pb ? `${secs(c.f)} · new best!` : secs(c.f), GOLD, true); sfx("finish"); }
   publish(false);
 }
@@ -388,7 +388,7 @@ function fit() {
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   const portrait = H > W * 1.05, btn = touchUI && !ATTRACT ? 100 : 0, safeB = $("sa").offsetHeight || 0;
   const sceneH = Math.round(H * (portrait ? 0.47 : 0.6));
-  L = { portrait, sceneH, btn, dashTop: sceneH, dashBottom: H - btn - safeB - 18 };
+  L = { portrait, sceneH, btn, dashTop: sceneH, dashBottom: H - btn - safeB - (btn ? 36 : 18) }; // on phones, room for the #net line above the button
   $("hint").style.top = sceneH + 6 + "px";
   backdrop.w = 0; // rebuild at the new size
 }
@@ -675,7 +675,7 @@ function drawDash(r, list, now) {
   }
   // reaction, time, place and your best: in a row on phones, beside the dial on wide screens
   const place = mine ? ranked(list).indexOf(mine) + 1 : 0, clock = mine ? (me.car.launched ? me.car.f || me.car.clock : Math.max(0, tg)) : 0;
-  const cells = [["REACTION", mine && me.car.rt >= 0 ? (me.car.rt / 1000).toFixed(3) : "-.---"], ["TIME", mine ? (clock / 1000).toFixed(2) : "--"],
+  const cells = [["REACTION", mine && me.car.rl ? "RED" : mine && me.car.rt >= 0 ? (me.car.rt / 1000).toFixed(3) : "-.---"], ["TIME", mine ? (clock / 1000).toFixed(2) : "--"],
     ["PLACE", place && me.car.launched ? `${ord(place)}/${list.length}` : "-"], ["BEST", me.best ? (me.best / 1000).toFixed(3) : "-.---"]];
   ctx.textBaseline = "alphabetic"; ctx.textAlign = "center";
   const side = Math.min(150, (W / 2 - R) * 0.6);
@@ -683,7 +683,7 @@ function drawDash(r, list, now) {
     const x = L.portrait ? W / 2 + (i - 1.5) * Math.min(120, W * 0.245) : cx + (i < 2 ? -1 : 1) * (R + 22 + side / 2);
     const y = L.portrait ? top + 34 : cy - R * 0.45 + (i % 2) * Math.max(56, R * 0.75);
     ctx.fillStyle = DIM; ctx.font = "700 11px system-ui, sans-serif"; ctx.fillText(label, x, y);
-    ctx.fillStyle = i === 0 && mine && me.car.rt >= 0 ? (me.car.rt < 200 ? GO : me.car.rt < 350 ? GOLD : LATE) : i === 3 ? GOLD : "#f4f1ff";
+    ctx.fillStyle = i === 0 && mine && me.car.rl ? BAD : i === 0 && mine && me.car.rt >= 0 ? (me.car.rt < 200 ? GO : me.car.rt < 350 ? GOLD : LATE) : i === 3 ? GOLD : "#f4f1ff";
     ctx.font = `800 ${L.portrait ? 19 : 24}px ui-monospace, Menlo, Consolas, monospace`; ctx.fillText(val, x, y + (L.portrait ? 22 : 27));
   });
 }
@@ -714,7 +714,7 @@ function hud(r, list) {
     const top = r.res[0];
     $("winner").textContent = !top ? "Race over" : top[0] === net.sessionId ? "You win!" : `${top[1]} wins!`;
     $("results").innerHTML = r.res.map(([id, name, color, f, rt, p, x, rl]) => `<li class="${id === net.sessionId ? "me" : ""}"><b style="color:${esc(color)}">●</b> ${esc(name)}<span>${f ? secs(f) : `${x} m`}</span>` +
-      `<small>${rt >= 0 ? `reaction ${(rt / 1000).toFixed(3)}s` : "no launch"} · ${p}/${CONFIG.gears.length - 1} perfect${rl ? " · red light" : ""}</small></li>`).join("");
+      `<small>${rl ? "red light" : rt >= 0 ? `reaction ${(rt / 1000).toFixed(3)}s` : "no launch"} · ${p}/${CONFIG.gears.length - 1} perfect</small></li>`).join("");
     $("again").textContent = me.ready === r.id ? "Waiting for the others…" : "Play again";
     $("next").textContent = `Next race in ${Math.max(0, Math.ceil((r.endsAt - t) / 1000))}s`;
     if (boardFor !== r.id) { boardFor = r.id; showBoard(r); }
@@ -768,6 +768,7 @@ function sfx(kind) {
 document.body.classList.toggle("touch", touchUI);
 addEventListener("keydown", (e) => { if (e.repeat) return; if ([" ", "Enter", "ArrowUp", "w", "W"].includes(e.key)) { e.preventDefault(); act(e.timeStamp); } });
 cv.addEventListener("pointerdown", (e) => { e.preventDefault(); act(e.timeStamp); });
+cv.addEventListener("contextmenu", (e) => e.preventDefault()); // a right click shifts too, without opening the browser menu
 const actBtn = $("act");
 actBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); actBtn.classList.add("down"); act(e.timeStamp); });
 for (const ev of ["pointerup", "pointercancel", "pointerleave"]) actBtn.addEventListener(ev, () => actBtn.classList.remove("down"));
