@@ -26,6 +26,7 @@
   .card h2 { margin: 0 0 8px; font-size: 26px; }
   .card h3 { margin: 14px 0 4px; font-size: 14px; color: var(--gold); text-align: left; }
   .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; }
+  .card li.note { list-style: none; margin-left: -24px; } /* a status line, not a numbered entry */
   .card li { padding: 2px 0; }
   .card li span { float: right; font-variant-numeric: tabular-nums; }
   .card li small { display: block; color: var(--dim); font-size: 12px; }
@@ -44,7 +45,7 @@
 <button id="act" hidden>LAUNCH</button>
 <div id="over" hidden><div class="card">
   <h2 id="winner"></h2><ol id="results"></ol>
-  <h3>Fastest times</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Fastest times</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Play again</button><p id="next"></p>
 </div></div>
 <script>
@@ -722,13 +723,13 @@ function hud(r, list) {
 }
 function showBoard(r) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = `<li class="note">Leaderboards need a connection.</li>`; return; }
+  list.innerHTML = `<li class="note">Loading…</li>`;
   const mine = me.raceId === r.id && me.car.f && me.submitted !== r.id ? me.car.f : 0;
   me.submitted = r.id;
   (mine ? board.submit(Math.max(0, 60000 - mine)).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${secs(60000 - e.score)}</span></li>`).join("") : "<li>No times yet. Set the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${secs(60000 - e.score)}</span></li>`).join("") : `<li class="note">No times yet. Set the first.</li>`;
+  }).catch(() => { list.innerHTML = `<li class="note">Couldn't load the leaderboard.</li>`; });
 }
 function playAgain() { const r = race(); if (r && r.phase === "done") { me.ready = r.id; net.me.set("rdy", r.id); $("again").textContent = "Waiting for the others…"; } }
 $("again").onclick = playAgain;
