@@ -60,7 +60,7 @@
  *   RACE (HOST) ... the phases (stage, race, done), the lanes, the results, the bots.
  *                   Only the host writes these.
  *   MY CAR ........ launching, shifting, sending my car. Each player writes only its own.
- *   DRAW .......... the strip (sky, stands, lanes), the cars, the light tree, the dashboard
+ *   DRAW .......... the strip (sky, stands, lanes), the cars, the light tree, popups, the dashboard
  *   HUD & RESULTS . status line, hints, results card, leaderboard, sounds
  *   INPUT ......... one button: Space / click / tap (launch, then shift)
  *
@@ -192,6 +192,17 @@ function stepCar(c, dt) {
     if (c.x >= CONFIG.dist && x0 < CONFIG.dist) c.f = Math.round(c.clock - (h * 1000 * (c.x - CONFIG.dist)) / Math.max(1e-6, c.x - x0)) + (c.rl ? CONFIG.redLightMs : 0);
   }
 }
+/** The fastest any car can cover the strip (no reaction, every shift perfect), less a margin. The host
+ *  treats a finish time below it as a car that hasn't finished: no browser can win with a made-up time. */
+let fastest = { dist: 0, ms: 0 };
+function fastestMs() {
+  if (fastest.dist !== CONFIG.dist) {
+    const c = newCar(); launch(c, 0, false);
+    while (!c.f && c.clock < 60000) { if (rpmOf(c) >= 0.93) shiftUp(c); stepCar(c, 1 / 240); }
+    fastest = { dist: CONFIG.dist, ms: c.f - 250 };
+  }
+  return fastest.ms;
+}
 /** One gear up. Returns "perfect" (in the green zone: a kick and a boost), "early", "late" or "" (top gear). */
 function shiftUp(c) {
   if (c.g >= CONFIG.gears.length - 1 || c.f) return "";
@@ -286,7 +297,9 @@ function racers(r) {
     if (b) return void out.push({ id, lane, name: b.n, color: b.c, x: b.x, v: b.v, g: b.g, f: b.f, rt: b.rt, rl: b.rl, p: b.p, bot: true, exact: isHost() });
     if (id === net.sessionId) { if (me.raceId === r.id) out.push({ id, lane, name: myName, color: myColor, ...me.car, mine: true, exact: true }); return; }
     const p = S.entities.players[id], d = p && live.has(id) && carOf(id, r); // a player whose tab went quiet drops out
-    if (d) out.push({ id, lane, name: String(p.n || "Player"), color: p.c || "#ccc", x: d.x, v: d.v, g: d.g, f: d.f, rt: d.rt, rl: d.rl, p: d.p });
+    const num = (n, lo, hi) => (Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : lo); // another browser's numbers: kept in range
+    if (d) out.push({ id, lane, name: String(p.n || "Player"), color: p.c || "#ccc", x: num(d.x, 0, CONFIG.dist + 400), v: num(d.v, 0, 100), g: num(Math.round(d.g), 0, CONFIG.gears.length - 1),
+      f: num(d.f, 0, 1e6) >= fastestMs() ? d.f : 0, rt: num(d.rt, -1, 1e5), rl: d.rl ? 1 : 0, p: num(Math.round(d.p), 0, CONFIG.gears.length - 1) });
   });
   out.lanes = ids.length;
   return out;
@@ -301,7 +314,9 @@ function hostTick(now) {
   if (!r) r = writeRace(newRace(1));
   if (host.raceId !== r.id) { host.raceId = r.id; host.bots = []; } // a new race: fresh bots
   if (r.phase === "stage") {
-    if (t < r.greenAt - CONFIG.amberMs * 3 || !host.bots.length) fillBots(); // lanes can change until the ambers light
+    const seatsLeft = Math.max(0, CONFIG.seats - humans().length);
+    if (t < r.greenAt - CONFIG.amberMs * 3 || !host.bots.length) fillBots(); // lanes can change until the ambers light...
+    else if (host.bots.length > seatsLeft) host.bots.length = seatsLeft; // ...but a human who lines up late still takes a bot's lane
     if (t >= r.greenAt) r = writeRace({ ...r, phase: "race", endsAt: r.greenAt + CONFIG.raceMs, lanes: racers(r).map((x) => x.id) });
   }
   if (t >= r.greenAt) driveBots(r, t);
@@ -523,10 +538,10 @@ function drawScene(r, list, now, dt) {
   }
   // cars, top lane first
   const order = ranked(list);
-  let mePos = null;
+  let mePos = null; L.mePos = null;
   for (const { rc, s } of vs) {
     const ground = lanesTop + rc.lane * LH + LH * 0.86, k = carPx * cam.z / 100, front = sx(s.x);
-    if (rc.mine) mePos = { x: Math.max(80, Math.min(W - 80, front - 50 * k)), y: ground - 40 * k };
+    if (rc.mine) L.mePos = mePos = { x: Math.max(80, Math.min(W - 80, front - 50 * k)), y: ground - 40 * k };
     if (front < 0 || front - carPx * cam.z > W) { edgeTag(rc, s, front, ground - LH * 0.4, vs); continue; }
     if (rc.v > 2 && Math.random() < 0.25 && !rc.f && s.launchAt && now - s.launchAt < 1600) smoke(s.x - CAR_M * 0.85, rc, 1);
     const tilt = s.launchAt && now - s.launchAt < 700 ? Math.sin(((now - s.launchAt) / 700) * Math.PI) * 0.1 : 0;
@@ -537,13 +552,18 @@ function drawScene(r, list, now, dt) {
       ctx.fillStyle = rc.rl && !rc.f ? BAD : rc.mine ? GOLD : "#ffffffcc"; ctx.fillText(ATTRACT ? "" : label, front - 50 * k, ground - 34 * k);
     }
   }
-  // popups (reaction, shift grades, red light) float up from your car
+}
+/** Popups (reaction, shift grades, red light) float up from your car: drawn over the light tree, and below it while it is lit. */
+function drawPops(now) {
+  const mePos = L.mePos, skyH = L.skyH || 100;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   for (let i = pops.length - 1; i >= 0; i--) {
     const p = pops[i], age = (now - p.at) / 1000;
     if (age > 1.1 || !mePos) { pops.splice(i, 1); continue; }
-    const grow = p.big ? 1 + Math.max(0, 0.2 - age) * 2 : 1, y = Math.max(skyH * 0.5, mePos.y - 6 - age * 34 - (pops.length - 1 - i) * 26);
+    const grow = p.big ? 1 + Math.max(0, 0.2 - age) * 2 : 1, size = Math.round((p.big ? 26 : 19) * grow);
+    const y = Math.max(skyH * 0.5, L.treeBottom ? L.treeBottom + size + 4 : 0, mePos.y - 6 - age * 34 - (pops.length - 1 - i) * 26);
     ctx.globalAlpha = Math.min(1, (1.1 - age) * 3); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-    ctx.font = `900 ${Math.round((p.big ? 26 : 19) * grow)}px system-ui, sans-serif`;
+    ctx.font = `900 ${size}px system-ui, sans-serif`;
     ctx.lineWidth = 5; ctx.strokeStyle = "#0b0a1c"; ctx.strokeText(p.text, mePos.x, y); ctx.fillStyle = p.color; ctx.fillText(p.text, mePos.x, y);
     ctx.globalAlpha = 1;
   }
@@ -598,11 +618,13 @@ function drawCar(x, y, k, color, spin, tilt, mine, chute, flame) {
 let lastLit = 0;
 function drawTree(r, now) {
   const tg = Date.now() - r.greenAt;
+  L.treeBottom = 0;
   if (r.phase === "done" || tg > 1400) { lastLit = 0; return; }
   const lit = tg >= 0 ? 4 : tg >= -CONFIG.amberMs ? 3 : tg >= -CONFIG.amberMs * 2 ? 2 : tg >= -CONFIG.amberMs * 3 ? 1 : 0;
   if (lit !== lastLit) { if (lit > lastLit && lit < 4) sfx("amber"); if (lit === 4) sfx("green"); lastLit = lit; }
   const b = Math.max(9, Math.min(26, (W * 0.8) / 11.5, ((L.skyH || 100) - 36) / 3.3)), gap = b * 0.7, n = 4, w = n * b * 2 + (n - 1) * gap + b * 1.4, h = b * 3.2;
   const x0 = (W - w) / 2, y0 = 32, fade = tg > 900 ? 1 - (tg - 900) / 500 : 1;
+  if (fade > 0.3) L.treeBottom = y0 + h;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalAlpha = Math.max(0, fade);
   ctx.fillStyle = "#0b0a1ce6"; round(x0, y0, w, h, h / 2); ctx.fill(); ctx.strokeStyle = "#ffffff30"; ctx.lineWidth = 1.5; ctx.stroke();
   for (let i = 0; i < n; i++) {
@@ -709,7 +731,7 @@ function hud(r, list) {
   const tap = touchUI ? "Tap" : "Press Space or click";
   $("status").textContent = r.phase === "stage" ? (racing ? (tg < -CONFIG.amberMs * 3 ? `Race ${r.id} · line up` : "Get ready…") : "Next race soon")
     : r.phase === "race" ? (!racing ? "Race on: you're in the next one" : !c.launched && !me.jumped ? "GO! GO! GO!" : c.f ? `Home in ${secs(c.f)}` : "") : "Race over";
-  $("hint").textContent = !racing || r.phase === "done" ? "" : !c.launched ? `${tap} on GREEN to launch. Not before!` : !c.f && me.grades.length < 2 ? `${tap} when the needle is in the GREEN zone to shift up` : "";
+  $("hint").textContent = !racing || r.phase === "done" ? "" : !c.launched ? (me.jumped ? `Red light: you roll at green with ${(CONFIG.redLightMs / 1000).toFixed(1)}s added to your time` : `${tap} on GREEN to launch. Not before!`) : !c.f && me.grades.length < 2 ? `${tap} when the needle is in the GREEN zone to shift up` : "";
   $("over").hidden = r.phase !== "done";
   if (r.phase === "done") {
     const top = r.res[0];
@@ -792,6 +814,7 @@ function frame(now) {
     const list = racers(r);
     drawScene(r, list, now, dt);
     drawTree(r, now);
+    drawPops(now);
     drawDash(r, list, now);
     engineSound(r);
     if (now - lastHud > 100) { lastHud = now; hud(r, list); }
